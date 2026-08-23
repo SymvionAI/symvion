@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symvion v0.3 | Enterprise AI Orchestration</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="navbar">
+        <div class="container">
+            <div class="logo">Symvion<span>v0.3</span></div>
+            <nav>
+                <a href="#overview">Overview</a>
+                <a href="#industries">Industries</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#get-started" class="btn btn-secondary">Get Started</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="hero-overlay"></div>
+        <div class="container hero-content">
+            <div class="hero-text">
+                <h1>AI Orchestration for the <span>Modern Enterprise</span></h1>
+                <p>Isolated, observable, and group-aware runtime for Insurance, Asset Management, and Trustees.</p>
+                <div class="hero-actions">
+                    <a href="#industries" class="btn btn-primary">Group Use Cases</a>
+                    <a href="#architecture" class="btn btn-outline">Explore v0.3</a>
+                </div>
+            </div>
+            <div class="hero-image">
+                <img src="assets/hero.png" alt="Symvion Enterprise">
+            </div>
+        </div>
+    </section>
+
+    <section id="industries" class="industries">
+        <div class="container">
+            <h2 class="section-title">One Platform. <span>Multiple Entities.</span></h2>
+            <div class="industry-grid">
+                <div class="industry-card glass">
+                    <div class="icon">🛡️</div>
+                    <h3>Insurance</h3>
+                    <p>Automated claims processing, policy analysis, and customer support with strict PII isolation.</p>
+                    <ul class="tag-list">
+                        <li>Tenant Isolation</li>
+                        <li>Tool Safety</li>
+                    </ul>
+                </div>
+                <div class="industry-card glass">
+                    <div class="icon">📈</div>
+                    <h3>Asset Management</h3>
+                    <p>Portfolio analysis, market sentiment agents, and real-time execution with full audit trails.</p>
+                    <ul class="tag-list">
+                        <li>High Concurrency</li>
+                        <li>Observability</li>
+                    </ul>
+                </div>
+                <div class="industry-card glass">
+                    <div class="icon">⚖️</div>
+                    <h3>Trustees & Legal</h3>
+                    <p>Document verification, legal check guardrails, and secure trust administration.</p>
+                    <ul class="tag-list">
+                        <li>Lifecycle Hooks</li>
+                        <li>Audit Logs</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="architecture" class="architecture">
+        <div class="container">
+            <div class="arch-split">
+                <div class="arch-text">
+                    <h2>Advanced Multi-Tenant <span>Runtime</span></h2>
+                    <p>Symvion v0.3 leverages <strong>TenantContext</strong> to ensure that every agent interaction is securely scoped to the correct entity within your group.</p>
+                    
+                    <div class="feature-item">
+                        <span class="dot green"></span>
+                        <div>
+                            <h4>Isolated Registries</h4>
+                            <p>Separate agents and tools for Insurance vs. Trustees to prevent accidental data leakage.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="feature-item">
+                        <span class="dot blue"></span>
+                        <div>
+                            <h4>Global Factory Pattern</h4>
+                            <p>FastAPI-ready runtime manager for handling thousands of concurrent tenant runtimes with caching.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="feature-item">
+                        <span class="dot purple"></span>
+                        <div>
+                            <h4>JSON Observability</h4>
+                            <p>Centrally monitor all group activities with structured logs designed for modern SIEMs.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="arch-code glass">
+                    <div class="code-header">
+                        <span class="dot-red"></span>
+                        <span class="dot-yellow"></span>
+                        <span class="dot-green"></span>
+                        <span class="code-title">enterprise_config.py</span>
+                    </div>
+                    <pre><code>
+# Group-level orchestration
+config = TenantConfig(
+  tenant_id="insurance_sub",
+  llm_provider="anthropic",
+  logging=LoggingConfig(
+    file_path="claims_audit.log",
+    show_json=True
+  )
+)
+
+# Registry-based tool invocation
+async def execute(self, ctx, data, tools):
+    claim = await tools.invoke(
+        "fetch_claim", ctx, {"id": 123}
+    )
+    return {"agent_response": "Processed"}
+                    </code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Symvion AI. Built for Enterprise Precision.</p>
+        </div>
+    </footer>
+</body>
+</html>

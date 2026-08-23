@@ -1,0 +1,43 @@
+# Founder doctrine principles for doctrine evaluation.
+# Loaded by DoctrineCache and used by DoctrineEngine and LegacyAgent.
+
+principles:
+  - name: "Institution before individual"
+    rules:
+      - avoid decisions dependent on a single leader
+      - prefer structural institutional solutions
+
+  - name: "Execution discipline"
+    rules:
+      - proposals must include owners
+      - proposals must include milestones
+
+  - name: "Governance integrity"
+    rules:
+      - decisions must be traceable and auditable
+      - clear accountability for outcomes
+
+  - name: "Strategic leverage"
+    rules:
+      - prioritize initiatives with compounding returns
+      - align investments with long-term vision
+
+  - name: "Talent impact"
+    rules:
+      - consider impact on people and capability
+      - build institutional knowledge
+
+  - name: "Capital logic"
+    rules:
+      - capital allocation must be justified
+      - risk and return must be explicit
+
+  - name: "Ecosystem relevance"
+    rules:
+      - consider external stakeholders and market context
+      - strengthen ecosystem position
+
+  - name: "Vision alignment"
+    rules:
+      - align with stated mission and values
+      - avoid short-term trade-offs that undermine vision

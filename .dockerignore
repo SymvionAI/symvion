@@ -1,0 +1,12 @@
+venv
+.git
+*.md
+.env
+.env.*
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+documents/*
+!documents/.gitkeep

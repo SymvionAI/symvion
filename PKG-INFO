@@ -1,0 +1,71 @@
+Metadata-Version: 2.4
+Name: symvion
+Version: 0.4.6
+Summary: Multi-tenant AI orchestration framework powered by LangGraph.
+Requires-Python: >=3.9
+Requires-Dist: click>=8.0.0
+Requires-Dist: langchain-anthropic
+Requires-Dist: langchain-openai
+Requires-Dist: langchain>=0.1.0
+Requires-Dist: langgraph>=0.0.21
+Requires-Dist: pydantic>=2.0
+Provides-Extra: dev
+Requires-Dist: mypy; extra == 'dev'
+Requires-Dist: pytest; extra == 'dev'
+Requires-Dist: pytest-asyncio; extra == 'dev'
+Description-Content-Type: text/markdown
+
+# Symvion AI Runtime
+
+A multi-tenant AI orchestration framework powered by LangGraph.
+
+## Core Capabilities
+Symvion provides a clean, modular Python package that supports:
+- Multi-tenant orchestration with isolated contexts
+- Dynamic agent registration via APIs (stating payloads and expected responses schemas)
+- Abstracted Tool/function calling 
+- Observability hooks and state routing via LangGraph
+
+## Installation
+
+```bash
+# From the pypi
+pip install symvion
+```
+
+## Example Usage
+
+```python
+import asyncio
+from symvion import Symvion, TenantConfig
+
+async def main():
+    config = TenantConfig(tenant_id="acme_corp")
+    runtime = Symvion(config=config)
+    
+    runtime.register_agent({
+        "name": "task_orchestrator",
+        "description": "Orchestrates general tasks and queries",
+        "system_prompt": "You are a helpful task orchestrator. Help the user with their request.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"task_description": {"type": "string"}}
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {"action_plan": {"type": "string"}, "is_complete": {"type": "boolean"}}
+        },
+        "tools": []
+    })
+    
+    response = await runtime.chat(
+        tenant="acme_corp",
+        agent_name="task_orchestrator",
+        payload_data={"task_description": "Organize my daily schedule and send notifications."}
+    )
+    print("Response:")
+    print(response)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Symvion v0.3 | Component Documentation</title>
+  <link rel="stylesheet" href="docs.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+</head>
+
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">Symvion<span>v0.3</span></div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-group">
+          <div class="nav-title">Getting Started</div>
+          <a href="#introduction" class="nav-link active">Introduction</a>
+          <a href="#configuration" class="nav-link">Configuration</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-title">Core Components</div>
+          <a href="#runtime" class="nav-link">Runtime (Symvion)</a>
+          <a href="#agents" class="nav-link">Agents & Lifecycle</a>
+          <a href="#tools" class="nav-link">Tools & Safety</a>
+          <a href="#factory" class="nav-link">Multi-Tenant Factory</a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-title">Observability</div>
+          <a href="#logging" class="nav-link">JSON Logging</a>
+          <a href="#langsmith" class="nav-link">LangSmith Tracing</a>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+      <article id="introduction" class="doc-section">
+        <h1>Introduction</h1>
+        <p>Symvion v0.3 is a production-grade AI orchestration platform designed for enterprise groups. It provides the
+          isolation, observability, and safety required to manage AI agents across multiple business entities like
+          <strong>Insurance</strong>, <strong>Asset Management</strong>, and <strong>Trustees</strong>.
+        </p>
+
+        <div class="alert note">
+          <strong>Key Philosophy:</strong> Symvion acts as the "FastAPI for AI Agents", providing a structured runtime
+          that separates business logic (agents/tools) from infrastructure (caching, logging, isolation).
+        </div>
+      </article>
+
+      <article id="configuration" class="doc-section">
+        <h1>Configuration</h1>
+        <p>Symvion is configured via the <code>TenantConfig</code> model. In a multi-entity group, each entity (e.g.,
+          Insurance) has its own config.</p>
+        <div class="code-block">
+          <pre><code>config = TenantConfig(
+    tenant_id="insurance",
+    llm_provider="openai",
+    llm_config={"model": "gpt-4-turbo"},
+    logging=LoggingConfig(file_path="audit.log")
+)</code></pre>
+        </div>
+      </article>
+
+      <article id="runtime" class="doc-section">
+        <h1>Core Runtime</h1>
+        <p>The <code>Symvion</code> class is the main entry point. It manages history, memory, and graph execution for a
+          specific tenant.</p>
+        <h3>Multi-Entity Usage</h3>
+        <p>For an insurance sub-entity, you initialize a runtime that is isolated to their specific agent registry and
+          memory store.</p>
+        <div class="code-block">
+          <pre><code>runtime = Symvion(config)
+response = await runtime.chat(
+    tenant="insurance", 
+    message="Check my policy status"
+)</code></pre>
+        </div>
+      </article>
+
+      <article id="agents" class="doc-section">
+        <h1>Agents & Lifecycle</h1>
+        <p>Agents inherit from <code>BaseAgent</code> and gain access to production hooks.</p>
+        <div class="code-block">
+          <pre><code>class InsuranceAgent(BaseAgent):
+    async def before_execute(self, context, data):
+        # Audit: Log who is accessing the policy
+        logger.info("POLICY_ACCESS", context, user=data['user'])
+
+    async def execute(self, context, data, tools):
+        # Logic here
+        return {"agent_response": "..."}</code></pre>
+        </div>
+      </article>
+
+      <article id="logging" class="doc-section">
+        <h1>JSON Logging</h1>
+        <p>Symvion v0.3 features a structured logging system that outputs machine-readable JSON to <code>stderr</code>
+          or a configurable file. This is essential for enterprise log aggregation (e.g., ELK, Datadog).</p>
+
+        <h3>Sample Log Structure</h3>
+        <div class="code-block">
+          <pre><code>{
+  "timestamp": "2026-04-16T05:21:42Z",
+  "event": "TOOL_CALLED",
+  "tenant_id": "insurance_sub",
+  "request_id": "811a90d8-...",
+  "tool_name": "fetch_policy",
+  "args": {"id": "POL-99"}
+}</code></pre>
+        </div>
+
+        <h3>Enabling Multi-Entity Logging</h3>
+        <p>Configure each entity to log to their own audit file for easier compliance checks.</p>
+        <div class="code-block">
+          <pre><code>config = TenantConfig(
+  tenant_id="asset_mgmt",
+  logging=LoggingConfig(
+    file_path="asset_mgmt_audit.log",
+    show_json=True,
+    level="INFO"
+  )
+)</code></pre>
+        </div>
+      </article>
+
+      <article id="langsmith" class="doc-section">
+        <h1>LangSmith Tracing</h1>
+        <p>Symvion v0.3 supports <strong>LangSmith</strong> out-of-the-box. Every agent execution, tool call, and
+          routing decision is traced with full parent-child relationships.</p>
+
+        <h3>How to Enable</h3>
+        <p>Simply set your environment variables. Symvion will automatically detect them and instrument the underlying
+          LangGraph.</p>
+        <div class="code-block">
+          <pre><code>export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY=your_key_here
+export LANGSMITH_PROJECT=symvion-ai-v0.3</code></pre>
+        </div>
+
+        <div class="alert note">
+          <strong>Enterprise Tip:</strong> Use the <code>request_id</code> from the JSON logs to find the corresponding
+          trace in LangSmith for deep debugging of specific customer interactions.
+        </div>
+      </article>
+
+      <article id="tools" class="doc-section">
+        <h1>Tools & Safety</h1>
+        <p>Tools are independent functions registered in a tenant's <code>ToolRegistry</code>. They are automatically
+          wrapped in a <code>ToolSafetyWrapper</code>.</p>
+        <h3>Decoupled Invocation</h3>
+        <div class="code-block">
+          <pre><code># Inside an agent
+record = await tools.invoke("db_query", context, {"id": 123})</code></pre>
+        </div>
+      </article>
+
+      <article id="factory" class="doc-section">
+        <h1>Multi-Tenant Factory</h1>
+        <p>The <code>SymvionFactory</code> manages thousands of concurrent runtimes. It efficiently caches compiled
+          graphs, ensuring that "Asset Management" and "Trustees" run on separate, isolated instances without
+          performance overhead.</p>
+      </article>
+    </main>
+  </div>
+
+  <script>
+    // Simple navigation script
+    const navLinks = document.querySelectorAll('.nav-link');
+    const sections = document.querySelectorAll('.doc-section');
+
+    navLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const targetId = link.getAttribute('href').substring(1);
+        const targetSection = document.getElementById(targetId);
+
+        window.scrollTo({
+          top: targetSection.offsetTop - 40,
+          behavior: 'smooth'
+        });
+
+        navLinks.forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+      });
+    });
+  </script>
+</body>
+
+</html>
