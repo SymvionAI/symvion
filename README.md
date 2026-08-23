@@ -12,10 +12,51 @@ Symvion provides a clean, modular Python package that supports:
 
 ## Installation
 
+Create a project in one command (Python equivalent of `npx create-next-app`). uv and pipx download the CLI, scaffold the app, pin `symvion` in `requirements.txt`, create `.venv`, and install dependencies.
+
+**uv**
+
 ```bash
-# From the pypi
-pip install symvion
+uvx --from symvion create-symvion my-project
 ```
+
+**pipx**
+
+```bash
+pipx run --spec symvion create-symvion my-project
+```
+
+Keep the CLI: `pipx install symvion`, then `create-symvion my-project`.
+
+**pip** (Windows, macOS, Linux — no `PATH` setup required)
+
+```bash
+python -m pip install symvion
+python -m symvion create my-project
+```
+
+**conda** — use `--no-install` so you do not nest a `.venv` inside the conda env:
+
+```bash
+conda create -n my-project python=3.12 -y
+conda activate my-project
+python -m pip install symvion
+python -m symvion create my-project --no-install
+cd my-project
+python -m pip install -r requirements.txt
+```
+
+**Poetry**
+
+```bash
+python -m pip install symvion
+python -m symvion create my-project --no-install
+cd my-project
+poetry init --no-interaction
+poetry add symvion python-dotenv
+```
+
+`symvion init` is an alias for `create`. Pass `--no-install` to scaffold files only.
 
 ## Example Usage
 

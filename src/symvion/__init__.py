@@ -1,11 +1,7 @@
-from symvion.core.runtime import Symvion
-from symvion.config.models import TenantConfig, AgentRegistration
-from symvion.config.loader import ConfigRegistry
-from symvion.rag.base import BaseRetriever
-from symvion.rag.pipeline import RAGPipeline
-from symvion.tools.retrieval import RetrievalTool
-from symvion.rag.providers.vertex import VertexRetriever
-from langchain_core.tools import tool
+"""Multi-tenant AI orchestration framework powered by LangGraph."""
+
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "Symvion",
@@ -13,9 +9,33 @@ __all__ = [
     "AgentRegistration",
     "ConfigRegistry",
     "tool",
-    # RAG
     "BaseRetriever",
     "RAGPipeline",
     "RetrievalTool",
     "VertexRetriever",
 ]
+
+_EXPORTS = {
+    "Symvion": "symvion.core.runtime",
+    "TenantConfig": "symvion.config.models",
+    "AgentRegistration": "symvion.config.models",
+    "ConfigRegistry": "symvion.config.loader",
+    "BaseRetriever": "symvion.rag.base",
+    "RAGPipeline": "symvion.rag.pipeline",
+    "RetrievalTool": "symvion.tools.retrieval",
+    "VertexRetriever": "symvion.rag.providers.vertex",
+    "tool": "langchain_core.tools",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list:
+    return sorted(set(globals()) | set(__all__))

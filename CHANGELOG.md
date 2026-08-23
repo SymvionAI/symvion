@@ -5,6 +5,18 @@ All notable changes to Symvion are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `python -m symvion` module entry (`__main__.py`) so the CLI works without `Scripts`/`bin` on `PATH` (Windows Git Bash, Store Python).
+- `create-symvion` console script — Python equivalent of `npx create-next-app`.
+- `symvion create` (with `init` kept as an alias). Creates a project venv and installs pinned `symvion` + `python-dotenv` by default; `--no-install` scaffolds only.
+
+### Changed
+- Package `__init__` lazy-loads public exports so the CLI starts without importing LangGraph.
+- Scaffold `requirements.txt` pins the installed Symvion version (`symvion==x.y.z`).
+- Scaffold no longer writes `__init__.py` into `data/` or `logs/`.
+
 ## [0.4.10] — 2026-08-15
 
 ### Security

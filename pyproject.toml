@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "symvion"
-version = "0.4.10"
+version = "0.4.11"
 description = "Multi-tenant AI orchestration framework powered by LangGraph."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 symvion = "symvion.cli:main"
+create-symvion = "symvion.cli:create_symvion"
 
 [project.optional-dependencies]
 dev = [
@@ -32,3 +33,6 @@ dev = [
     "pytest-asyncio",
     "mypy"
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
