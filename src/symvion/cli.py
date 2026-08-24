@@ -8,43 +8,66 @@ import click
 
 # Scaffolding Templates
 
-MAIN_PY_TEMPLATE = """from symvion import Symvion, TenantConfig
+MAIN_PY_TEMPLATE = """from symvion import AgentRegistration, Symvion, TenantConfig
 import asyncio
 import os
 
 from dotenv import load_dotenv
 
+from agents.custom_agent import CustomAgent
+from tools.custom_tool import multiply_and_add
+
 async def main():
     load_dotenv()
-    
-    # Option 1: Hardcoded Configuration (Fast Prototyping)
+
     config = TenantConfig(
         env_vars={"OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY")},
         tenant_id="acme-corp",
         llm_provider="openai",
         llm_config={"model": "gpt-4", "temperature": 0.7},
-        enabled_agents=["researcher", "reviewer"]
+        router_type="llm",
+        iam_policies={
+            "user": ["multiply_and_add"],
+            "tenant_admin": ["*"],
+        },
     )
-    
-    # Option 2: Enterprise Policy Loading (Commented Out)
-    # config = ConfigRegistry.load_tenant_config(
-    #     path="config/policies.yaml", 
-    #     tenant_id="acme-corp"
-    # )
-    
+
     runtime = Symvion(config)
-    
+    runtime.register_agent(
+        AgentRegistration(
+            name="math",
+            description="Uses multiply_and_add to multiply two numbers and add a third.",
+            system_prompt=(
+                "You are a math assistant. When the user asks to multiply and add numbers, "
+                "you must call the multiply_and_add tool. Do not compute the result yourself."
+            ),
+            tools=["multiply_and_add"],
+        )
+    )
+
+    runtime.register_agent({
+        "name": "custom",
+        "agent_class": CustomAgent,
+        "description": "A simple agent that can perform custom tasks.",
+        "system_prompt": (
+            "You are a custom assistant. When the user asks to perform custom tasks, "
+            "you must call the custom tool. Do not compute the result yourself."
+        ),
+        "tools": [],
+    })
+
     print("Symvion AI Runtime Initialized.")
     print("-" * 30)
-    
-    # Start a chat session
+
     response = await runtime.chat(
         tenant="acme-corp",
-        session_id="session-123",
-        message="Hello, how can you help me today?"
+        session_id="session-math-4",
+        message="Use the multiply_and_add tool to multiply 2 and 3 and add 4",
     )
-    
+
+    print(f"Agent: {response['agent']}")
     print(f"Agent Response: {response['data']}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -75,21 +98,120 @@ tenants:
         max_completion_tokens: 2000
 """
 
-EXAMPLE_AGENT_TEMPLATE = """from symvion.agents.base import BaseAgent
-from symvion import tool
+EXAMPLE_AGENT_TEMPLATE = """from typing import Any, Dict, Optional
 
-class CustomResearchAgent(BaseAgent):
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+
+from symvion.agents.base import BaseAgent
+from symvion.core.context import TenantContext
+from symvion.tools.base import ToolSafetyWrapper
+from symvion.tools.hitl import run_tool_with_hitl
+from symvion.utils.helpers import ensure_messages, filter_allowed_tools
+from tools.custom_tool import multiply_and_add
+
+class CustomAgent(BaseAgent):
     \"\"\"
-    An example enterprise agent for research tasks.
+    A simple agent that can perform custom tasks.
     \"\"\"
-    def __init__(self, tenant_id, config):
+    def __init__(self, tenant_id, config, tools=None):
         super().__init__(tenant_id, config)
-        self.name = "researcher"
-        self.description = "Specialized in deep research and documentation."
+        self.name = config.get("name", "custom")
+        self.description = config.get(
+            "description",
+            "A simple agent that can perform custom tasks.",
+        )
+        self.system_prompt = config.get(
+            "system_prompt",
+            "You are a custom assistant. When the user asks to perform custom tasks, "
+            "you must call the custom tool. Do not compute the result yourself.",
+        )
+        self.tools = tools or []
 
-    async def execute(self, state):
-        # Implementation logic here
-        return state
+    async def execute(
+        self,
+        context: TenantContext,
+        input_data: Dict[str, Any],
+        tools: Optional[Any] = None,
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        message = input_data.get("message", "")
+        history = input_data.get("history", [])
+
+        allowed_tools = filter_allowed_tools(context, self.tools)
+        llm_with_tools = self.llm.bind_tools(allowed_tools) if allowed_tools else self.llm
+
+        messages = [SystemMessage(content=self.system_prompt)]
+        messages.extend(ensure_messages(history[-5:]))
+        messages.append(HumanMessage(content=message))
+
+        response = None
+        usage = {}
+        async for chunk in llm_with_tools.astream(messages, config=config):
+            if response is None:
+                response = chunk
+            else:
+                response += chunk
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                usage = chunk.usage_metadata
+
+        tools_called = False
+        if getattr(response, "tool_calls", None):
+            import json
+
+            tools_called = True
+            messages.append(response)
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = dict(tool_call.get("args") or {})
+                call_id = tool_call.get("id", f"call_{tool_name}")
+                matched_tool = next((t for t in allowed_tools if t.name == tool_name), None)
+
+                async def _exec(name=tool_name, **kwargs):
+                    iam = context.metadata.get("iam_policies")
+                    fn = next((t for t in allowed_tools if t.name == name), None)
+                    if fn is None:
+                        return f"Error: Tool {name} not found"
+                    t_func = getattr(fn, "func", fn)
+                    if hasattr(t_func, "func"):
+                        t_func = t_func.func
+                    return await ToolSafetyWrapper.invoke(
+                        t_func, context, name, kwargs or {}, iam_policies=iam
+                    )
+
+                result = await run_tool_with_hitl(
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    call_id=call_id,
+                    execute=_exec,
+                    config=config,
+                    tool=matched_tool,
+                )
+                messages.append(
+                    ToolMessage(
+                        content=json.dumps(result) if not isinstance(result, str) else result,
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+
+            response = None
+            async for chunk in self.llm.astream(messages, config=config):
+                if response is None:
+                    response = chunk
+                else:
+                    response += chunk
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    usage = chunk.usage_metadata
+
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            usage = response.usage_metadata
+
+        return {
+            "agent_response": response.content,
+            "agent_type": self.name,
+            "token_usage": usage,
+            "tools_called": tools_called,
+        }
 """
 
 EXAMPLE_TOOL_TEMPLATE = '''from symvion import tool
@@ -100,6 +222,15 @@ def search_internal_docs(query: str) -> str:
     Searches the internal enterprise knowledge base.
     """
     return f"Search results for: {query} (Simulated)"
+
+
+@tool
+def multiply_and_add(a: int, b: int, c: int) -> int:
+    """
+    Multiplies two numbers and adds a third number and add 2 to the result.
+    """
+    return a * b + c + 2
+
 '''
 
 GITIGNORE_TEMPLATE = """# Python
