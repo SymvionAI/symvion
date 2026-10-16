@@ -11,11 +11,12 @@ from langchain_core.tools import StructuredTool
 from symvion.tools.quote_tools import get_quote_tools
 from symvion.providers.factory import ProviderFactory
 from symvion.agents.base import BaseAgent
-from symvion.utils.helpers import ensure_messages, filter_allowed_tools
+from symvion.utils.helpers import ensure_messages, filter_allowed_tools, merge_usage
 from symvion.core.context import TenantContext
 from symvion.prompts.registry import PromptRegistry
 from langchain_core.runnables import RunnableConfig
 from symvion.tools.base import ToolSafetyWrapper
+from symvion.tools.resolution import normalize_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -71,29 +72,57 @@ class QuoteAgent(BaseAgent):
         
         # Add current message
         messages.append(HumanMessage(content=message))
-        
-        # Invoke LLM using astream to enable token events
-        response = None
+
+        from symvion.tools.hitl import run_tool_with_hitl
+        import json
+
+        raw_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+        try:
+            max_steps = int(raw_limit) if raw_limit else 8
+        except (TypeError, ValueError):
+            max_steps = 8
+        if max_steps < 1:
+            max_steps = 1
+
+        async def _stream_model(model):
+            collected = None
+            step_usage = {}
+            async for chunk in model.astream(messages, config=config):
+                collected = chunk if collected is None else collected + chunk
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    step_usage = chunk.usage_metadata
+            return collected, step_usage
+
+        response_content = ""
         usage = {}
-        async for chunk in llm_with_tools.astream(messages, config=config):
-            if response is None:
-                response = chunk
-            else:
-                response += chunk
-            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                usage = chunk.usage_metadata
-        
         tools_called = False
-        if response.tool_calls:
-            from symvion.tools.hitl import run_tool_with_hitl
-            import json
+        finished = False
+        for _step in range(max_steps):
+            response, step_usage = await _stream_model(llm_with_tools)
+            if step_usage:
+                usage = merge_usage(usage, step_usage)
+            if response is None:
+                break
+            pending_calls = normalize_tool_calls(response)
+            if not pending_calls:
+                response_content = response.content
+                finished = True
+                break
+
             tools_called = True
             messages.append(response)
-            for tool_call in response.tool_calls:
+            for tool_call in pending_calls:
                 tool_name = tool_call["name"]
-                tool_args = dict(tool_call.get("args") or {})
-                call_id = tool_call.get("id", f"call_{tool_name}")
-
+                tool_args = dict(tool_call["args"] or {})
+                call_id = tool_call["id"]
+                if tool_call["error"] or not tool_name:
+                    messages.append(
+                        ToolMessage(
+                            content=f"Error: {tool_call['error'] or 'Tool call could not be parsed'}",
+                            tool_call_id=call_id,
+                        )
+                    )
+                    continue
                 matched_tool = next((t for t in allowed_tools if t.name == tool_name), None)
 
                 async def _exec(name=tool_name, **kwargs):
@@ -120,21 +149,15 @@ class QuoteAgent(BaseAgent):
                     config=config,
                     tool=matched_tool,
                 )
-                messages.append(ToolMessage(content=json.dumps(result), tool_call_id=tool_call["id"]))
-            
-            # Get final response using astream
-            response = None
-            async for chunk in self.llm.astream(messages, config=config):
-                if response is None:
-                    response = chunk
-                else:
-                    response += chunk
+                content = json.dumps(result) if not isinstance(result, str) else result
+                messages.append(ToolMessage(content=content, tool_call_id=call_id))
 
-        usage = response.usage_metadata if hasattr(response, "usage_metadata") else getattr(response, "response_metadata", {}).get("token_usage", {})
-        
+        if not finished and tools_called:
+            response_content = "I could not finish the tool workflow within the step limit."
+
         return {
-            "agent_response": response.content,
+            "agent_response": response_content,
             "agent_type": "quote_generator",
             "token_usage": usage,
-            "tools_called": tools_called 
+            "tools_called": tools_called,
         }

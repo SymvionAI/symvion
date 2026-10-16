@@ -20,6 +20,8 @@ class ToolRegistry:
     def __init__(self, iam_policies: Optional[Dict[str, List[str]]] = None):
         self._tools: Dict[str, Callable] = {}
         self._tool_objects: Dict[str, Any] = {}
+        self._langchain_tools: Dict[str, Any] = {}
+        self._bindable: Dict[str, Any] = {}
         self.iam_policies = iam_policies or {}
 
     # ------------------------------------------------------------------
@@ -29,6 +31,67 @@ class ToolRegistry:
     def register(self, name: str, func: Callable) -> None:
         """Register a plain callable as a tool."""
         self._tools[name] = func
+        self._bindable.pop(name, None)
+
+    def register_langchain_tool(self, name: str, tool: Any) -> None:
+        """Register a LangChain tool that ``bind_tools`` can use directly."""
+        if not getattr(tool, "name", None):
+            raise TypeError(
+                f"Tool '{name}' must be a LangChain tool with a name. "
+                f"Got {type(tool).__name__!r}."
+            )
+        self._langchain_tools[name] = tool
+        self._bindable.pop(name, None)
+
+    def lookup_bindable(self, name: str) -> Optional[Any]:
+        """Return a LangChain tool for ``name``, wrapping registry entries when needed."""
+        if name in self._bindable:
+            return self._bindable[name]
+        tool = None
+        if name in self._langchain_tools:
+            tool = self._langchain_tools[name]
+        elif name in self._tools:
+            tool = self._wrap_callable(name, self._tools[name])
+        elif name in self._tool_objects:
+            tool = self._wrap_object(name, self._tool_objects[name])
+        if tool is not None:
+            self._bindable[name] = tool
+        return tool
+
+    @staticmethod
+    def _wrap_callable(name: str, func: Callable) -> Any:
+        import asyncio
+        from langchain_core.tools import StructuredTool
+
+        description = (getattr(func, "__doc__", None) or name).strip()
+        if asyncio.iscoroutinefunction(func):
+            return StructuredTool.from_function(
+                coroutine=func, name=name, description=description
+            )
+        return StructuredTool.from_function(func=func, name=name, description=description)
+
+    @staticmethod
+    def _wrap_object(name: str, obj: Any) -> Any:
+        import asyncio
+        from langchain_core.tools import StructuredTool
+
+        description = str(getattr(obj, "description", None) or name)
+        execute = obj.execute
+        if asyncio.iscoroutinefunction(execute):
+
+            async def _run(**kwargs):
+                return await execute(kwargs)
+
+            return StructuredTool.from_function(
+                coroutine=_run, name=name, description=description
+            )
+
+        def _run_sync(**kwargs):
+            return execute(kwargs)
+
+        return StructuredTool.from_function(
+            func=_run_sync, name=name, description=description
+        )
 
     def get_tool(self, name: str) -> Callable:
         if name not in self._tools:
@@ -81,6 +144,7 @@ class ToolRegistry:
                 f"Got {type(tool).__name__!r} which does not."
             )
         self._tool_objects[name] = tool
+        self._bindable.pop(name, None)
 
     def get_tool_object(self, name: str) -> Any:
         """Return a registered tool object by name."""
@@ -140,5 +204,6 @@ class ToolRegistry:
         """Return a dict of {name: type} for every registered tool."""
         result = {name: "function" for name in self._tools}
         result.update({name: type(obj).__name__ for name, obj in self._tool_objects.items()})
+        result.update({name: "langchain" for name in self._langchain_tools})
         return result
 

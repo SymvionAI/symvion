@@ -53,7 +53,7 @@ async def main():
             "You are a custom assistant. When the user asks to perform custom tasks, "
             "you must call the custom tool. Do not compute the result yourself."
         ),
-        "tools": [],
+        "tools": ["multiply_and_add"],
     })
 
     print("Symvion AI Runtime Initialized.")
@@ -107,7 +107,8 @@ from symvion.agents.base import BaseAgent
 from symvion.core.context import TenantContext
 from symvion.tools.base import ToolSafetyWrapper
 from symvion.tools.hitl import run_tool_with_hitl
-from symvion.utils.helpers import ensure_messages, filter_allowed_tools
+from symvion.tools.resolution import normalize_tool_calls
+from symvion.utils.helpers import ensure_messages, filter_allowed_tools, merge_usage
 from tools.custom_tool import multiply_and_add
 
 class CustomAgent(BaseAgent):
@@ -126,7 +127,12 @@ class CustomAgent(BaseAgent):
             "You are a custom assistant. When the user asks to perform custom tasks, "
             "you must call the custom tool. Do not compute the result yourself.",
         )
-        self.tools = tools or []
+        spec = list(tools) if tools else list(config.get("tools") or [])
+        if spec and all(isinstance(item, str) for item in spec):
+            from symvion.tools.resolution import load_tools_by_name
+            self.tools = load_tools_by_name(spec)
+        else:
+            self.tools = spec
 
     async def execute(
         self,
@@ -145,26 +151,55 @@ class CustomAgent(BaseAgent):
         messages.extend(ensure_messages(history[-5:]))
         messages.append(HumanMessage(content=message))
 
-        response = None
-        usage = {}
-        async for chunk in llm_with_tools.astream(messages, config=config):
-            if response is None:
-                response = chunk
-            else:
-                response += chunk
-            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                usage = chunk.usage_metadata
+        import json
 
+        raw_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+        try:
+            max_steps = int(raw_limit) if raw_limit else 8
+        except (TypeError, ValueError):
+            max_steps = 8
+        if max_steps < 1:
+            max_steps = 1
+
+        async def _stream_model(model):
+            collected = None
+            step_usage = {}
+            async for chunk in model.astream(messages, config=config):
+                collected = chunk if collected is None else collected + chunk
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    step_usage = chunk.usage_metadata
+            return collected, step_usage
+
+        response_content = ""
+        usage = {}
         tools_called = False
-        if getattr(response, "tool_calls", None):
-            import json
+        finished = False
+        for _step in range(max_steps):
+            response, step_usage = await _stream_model(llm_with_tools)
+            if step_usage:
+                usage = merge_usage(usage, step_usage)
+            if response is None:
+                break
+            pending_calls = normalize_tool_calls(response)
+            if not pending_calls:
+                response_content = response.content
+                finished = True
+                break
 
             tools_called = True
             messages.append(response)
-            for tool_call in response.tool_calls:
+            for tool_call in pending_calls:
                 tool_name = tool_call["name"]
                 tool_args = dict(tool_call.get("args") or {})
-                call_id = tool_call.get("id", f"call_{tool_name}")
+                call_id = tool_call["id"]
+                if tool_call["error"] or not tool_name:
+                    messages.append(
+                        ToolMessage(
+                            content=f"Error: {tool_call['error'] or 'Tool call could not be parsed'}",
+                            tool_call_id=call_id,
+                        )
+                    )
+                    continue
                 matched_tool = next((t for t in allowed_tools if t.name == tool_name), None)
 
                 async def _exec(name=tool_name, **kwargs):
@@ -190,24 +225,15 @@ class CustomAgent(BaseAgent):
                 messages.append(
                     ToolMessage(
                         content=json.dumps(result) if not isinstance(result, str) else result,
-                        tool_call_id=tool_call["id"],
+                        tool_call_id=call_id,
                     )
                 )
 
-            response = None
-            async for chunk in self.llm.astream(messages, config=config):
-                if response is None:
-                    response = chunk
-                else:
-                    response += chunk
-                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                    usage = chunk.usage_metadata
-
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            usage = response.usage_metadata
+        if not finished and tools_called:
+            response_content = "I could not finish the tool workflow within the step limit."
 
         return {
-            "agent_response": response.content,
+            "agent_response": response_content,
             "agent_type": self.name,
             "token_usage": usage,
             "tools_called": tools_called,

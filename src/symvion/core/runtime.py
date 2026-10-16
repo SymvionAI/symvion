@@ -145,6 +145,7 @@ class Symvion:
                 if agent_class:
                     config = self.agents.merge_agent_config(name, payload)
                     instance = agent_class(self.config.tenant_id, config)
+                    self._attach_resolved_tools(instance, config.get("tools"))
                     self.agents._agents[name] = instance
                     logger.info("CUSTOM_AGENT_REGISTERED", None, tenant_id=self.config.tenant_id, agent_name=name)
                     self.graph = None
@@ -163,6 +164,26 @@ class Symvion:
         self.agents.register_via_api(registration)
         logger.info("AGENT_REGISTERED", None, tenant_id=self.config.tenant_id, agent_name=registration.name)
         self.graph = None # Require recompile
+
+    def _attach_resolved_tools(self, instance: Any, spec: Any) -> None:
+        """Bind any tool names the agent class did not already resolve, including registry tools."""
+        if not hasattr(instance, "tools"):
+            return
+        current = list(getattr(instance, "tools", None) or [])
+        from symvion.tools.resolution import load_tools_by_name
+
+        names = [item for item in (spec or []) if isinstance(item, str)]
+        objects = [item for item in list(spec or []) + current if getattr(item, "name", None)]
+        have = {item.name for item in objects}
+        missing = [name for name in names if name not in have]
+        if not missing:
+            if objects and any(isinstance(item, str) for item in current):
+                instance.tools = objects
+            return
+        loaded = load_tools_by_name(missing, self.tools)
+        merged = objects + [item for item in loaded if item.name not in have]
+        if merged:
+            instance.tools = merged
 
     # ------------------------------------------------------------------
     # RAG integration

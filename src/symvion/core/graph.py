@@ -198,52 +198,70 @@ class GraphFactory:
                     sys_msg = SystemMessage(content=system_prompt)
                     llm_messages = [sys_msg] + ensure_messages(messages)
                     
-                    # Load actual langchain tools
+                    # Load actual langchain tools from the project package, then the registry.
                     from symvion.utils.helpers import filter_allowed_tools
                     from symvion.tools.base import ToolSafetyWrapper
+                    from symvion.tools.resolution import load_tools_by_name, normalize_tool_calls
 
-                    loaded_tools = []
-                    if agent_tools_names:
-                        import importlib, pkgutil
-                        # pyrefly: ignore [missing-import]
-                        import tools as tools_pkg
-                        for _, modname, _ in pkgutil.iter_modules(tools_pkg.__path__):
-                            try:
-                                mod = importlib.import_module(f"tools.{modname}")
-                                for t_name in agent_tools_names:
-                                    if hasattr(mod, t_name):
-                                        t_func = getattr(mod, t_name)
-                                        if hasattr(t_func, "name"):
-                                            loaded_tools.append(t_func)
-                            except Exception as e:
-                                logger.error("TOOL_LOAD_ERROR", ctx, error=str(e))
+                    loaded_tools = load_tools_by_name(agent_tools_names, tools) if agent_tools_names else []
 
                     # Enforce IAM before the model can see or call tools.
                     loaded_tools = filter_allowed_tools(ctx, loaded_tools)
                                 
                     llm_with_tools = llm.bind_tools(loaded_tools) if loaded_tools else llm
-                    
-                    # Use astream for dynamic agents
+
+                    import json
+                    from symvion.tools.hitl import run_tool_with_hitl
+                    from langchain_core.messages import ToolMessage
+
+                    raw_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+                    try:
+                        max_steps = int(raw_limit) if raw_limit else 8
+                    except (TypeError, ValueError):
+                        max_steps = 8
+                    if max_steps < 1:
+                        max_steps = 1
+
+                    async def _stream_model(model):
+                        collected = None
+                        step_usage = {}
+                        async for chunk in model.astream(llm_messages, config=config):
+                            collected = chunk if collected is None else collected + chunk
+                            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                                step_usage = chunk.usage_metadata
+                        return collected, step_usage
+
+                    # Keep tools bound so a result can lead to another tool call.
                     response_text = ""
                     usage = {}
-                    
-                    response = None
-                    async for chunk in llm_with_tools.astream(llm_messages, config=config):
-                        if response is None: response = chunk
-                        else: response += chunk
-                        
-                    if hasattr(response, "tool_calls") and response.tool_calls:
+                    finished = False
+                    for _step in range(max_steps):
+                        response, step_usage = await _stream_model(llm_with_tools)
+                        if step_usage:
+                            usage = merge_usage(usage, step_usage)
+                        if response is None:
+                            break
+                        pending_calls = normalize_tool_calls(response)
+                        if not pending_calls:
+                            response_text = response.content
+                            finished = True
+                            break
+
                         tools_called = True
                         llm_messages.append(response)
-                        
-                        import json
-                        import inspect
-                        from symvion.tools.hitl import run_tool_with_hitl
-                        for tool_call in response.tool_calls:
-                            t_name = tool_call.get("name")
-                            t_args = tool_call.get("args", {})
-                            call_id = tool_call.get("id") or f"call_{t_name}"
-                            
+                        for tool_call in pending_calls:
+                            t_name = tool_call["name"]
+                            t_args = tool_call["args"]
+                            call_id = tool_call["id"]
+                            if tool_call["error"] or not t_name:
+                                llm_messages.append(
+                                    ToolMessage(
+                                        content=f"Error: {tool_call['error'] or 'Tool call could not be parsed'}",
+                                        tool_call_id=call_id,
+                                    )
+                                )
+                                continue
+
                             matched_tool = None
                             t_func = None
                             for t in loaded_tools:
@@ -253,7 +271,7 @@ class GraphFactory:
                                     if hasattr(t_func, "func"):
                                         t_func = t_func.func
                                     break
-                            
+
                             res_content = "Tool not found"
                             if t_func:
                                 try:
@@ -290,23 +308,13 @@ class GraphFactory:
                                     if type(e).__name__ in ("GraphInterrupt", "GraphBubbleUp"):
                                         raise
                                     res_content = "Error: tool execution failed"
-                                    
-                            from langchain_core.messages import ToolMessage
-                            llm_messages.append(ToolMessage(content=res_content, tool_call_id=tool_call.get("id")))
-                            
-                        # Get final response
-                        final_response = None
-                        async for chunk in llm.astream(llm_messages, config=config):
-                            if final_response is None: final_response = chunk
-                            else: final_response += chunk
-                            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                                usage = chunk.usage_metadata
-                        response_text = final_response.content
-                    else:
-                        tools_called = False
-                        response_text = response.content
-                        if hasattr(response, "usage_metadata") and response.usage_metadata:
-                            usage = response.usage_metadata
+
+                            llm_messages.append(
+                                ToolMessage(content=res_content, tool_call_id=call_id)
+                            )
+
+                    if not finished and tools_called:
+                        response_text = "I could not finish the tool workflow within the step limit."
 
             # Aggregate usage with previous nodes (e.g. router) safely
             current_usage = state.get("token_usage", {})

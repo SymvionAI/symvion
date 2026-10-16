@@ -7,6 +7,7 @@ from symvion.core.logger import logger
 from symvion.core.exceptions import AgentExecutionError
 from langchain_core.runnables import RunnableConfig
 from symvion.providers.factory import ProviderFactory
+from symvion.tools.hitl import reraise_if_hitl_pause
 
 class BaseAgent(ABC):
     """
@@ -81,6 +82,7 @@ class BaseAgent(ABC):
                     await self.on_error(context, err)
                     raise err
             except Exception as e:
+                reraise_if_hitl_pause(e)
                 logger.warning("AGENT_ATTEMPT_FAILED", context, agent_name=self.name, attempt=attempt+1, error=str(e))
                 if attempt == retries - 1:
                     await self.on_error(context, e)

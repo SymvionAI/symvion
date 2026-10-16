@@ -13,12 +13,13 @@ from symvion.tools.claims_tools import get_claims_tools
 from symvion.agents.fraud_scoring_agent import FraudScoringAgent
 from symvion.providers.factory import ProviderFactory
 from symvion.agents.base import BaseAgent
-from symvion.utils.helpers import ensure_messages, filter_allowed_tools
+from symvion.utils.helpers import ensure_messages, filter_allowed_tools, merge_usage
 from symvion.core.context import TenantContext
 from symvion.prompts.registry import PromptRegistry
 from langchain_core.runnables import RunnableConfig
 from symvion.tools.base import ToolSafetyWrapper
 from symvion.tools.hitl import reraise_if_hitl_pause, run_tool_with_hitl
+from symvion.tools.resolution import normalize_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -182,27 +183,56 @@ class ClaimsAgent(BaseAgent):
             # Add current user message
             messages.append(HumanMessage(content=message))
 
-            # Get response from LLM using astream to enable token events
-            response = None
-            async for chunk in llm_with_tools.astream(messages, config=config):
+            raw_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+            try:
+                max_steps = int(raw_limit) if raw_limit else 8
+            except (TypeError, ValueError):
+                max_steps = 8
+            if max_steps < 1:
+                max_steps = 1
+
+            async def _stream_model(model):
+                collected = None
+                step_usage = {}
+                async for chunk in model.astream(messages, config=config):
+                    collected = chunk if collected is None else collected + chunk
+                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                        step_usage = chunk.usage_metadata
+                return collected, step_usage
+
+            response_content = ""
+            usage = {}
+            tools_called = False
+            finished = False
+            iam = context.metadata.get("iam_policies")
+            for _step in range(max_steps):
+                response, step_usage = await _stream_model(llm_with_tools)
+                if step_usage:
+                    usage = merge_usage(usage, step_usage)
                 if response is None:
-                    response = chunk
-                else:
-                    response += chunk
+                    break
+                pending_calls = normalize_tool_calls(response)
+                if not pending_calls:
+                    response_content = response.content
+                    finished = True
+                    break
 
-            # Check if LLM wants to call tools
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                # Execute tool calls
-                tool_results = []
-                iam = context.metadata.get("iam_policies")
-                for tool_call in response.tool_calls:
-                    tool_name = tool_call.get("name")
-                    tool_args = tool_call.get("args", {})
-                    call_id = tool_call.get("id", f"call_{tool_name}")
-
+                tools_called = True
+                messages.append(response)
+                for tool_call in pending_calls:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call["args"]
+                    call_id = tool_call["id"]
+                    if tool_call["error"] or not tool_name:
+                        messages.append(
+                            ToolMessage(
+                                content=f"Error: {tool_call['error'] or 'Tool call could not be parsed'}",
+                                tool_call_id=call_id,
+                            )
+                        )
+                        continue
                     logger.info(f"Claims agent tool call: {tool_name}")
 
-                    # Find the tool and execute it
                     matched_tool = None
                     tool_func = None
                     for tool in allowed_tools:
@@ -232,7 +262,7 @@ class ClaimsAgent(BaseAgent):
                                 config=config,
                                 tool=matched_tool,
                             )
-                            tool_results.append({"tool": tool_name, "result": result})
+                            result_str = json.dumps(result)
                         except Exception as tool_error:
                             reraise_if_hitl_pause(tool_error)
                             logger.error(
@@ -240,43 +270,25 @@ class ClaimsAgent(BaseAgent):
                                 tool_name,
                                 type(tool_error).__name__,
                             )
-                            tool_results.append(
-                                {"tool": tool_name, "error": "tool execution failed"}
-                            )
+                            result_str = "Error: tool execution failed"
                     else:
-                        tool_results.append({"tool": tool_name, "error": "Tool not found"})
+                        result_str = "Error: Tool not found"
 
-                # Add tool results to messages
-                messages.append(response)
-                for i, tool_call in enumerate(response.tool_calls):
-                    tool_result = tool_results[i] if i < len(tool_results) else {"error": "No result"}
-                    tool_call_id = tool_call.get("id", f"call_{i}")
+                    messages.append(ToolMessage(content=result_str, tool_call_id=call_id))
 
-                    result_str = json.dumps(tool_result.get("result")) if "result" in tool_result else f"Error: {tool_result.get('error')}"
-                    messages.append(ToolMessage(content=result_str, tool_call_id=tool_call_id))
-
-                # Get final response after tool execution using astream
-                final_response = None
-                async for chunk in self.llm.astream(messages, config=config):
-                    if final_response is None:
-                        final_response = chunk
-                    else:
-                        final_response += chunk
-                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                        usage = chunk.usage_metadata
-                
-                response_content = final_response.content
-            else:
-                response_content = response.content
+            if not finished and tools_called:
+                response_content = "I could not finish the tool workflow within the step limit."
 
             return {
                 "content": response_content,
                 "agent_type": "claims",
                 "tenant_id": self.tenant_id,
-                "token_usage": usage
+                "token_usage": usage,
+                "tools_called": tools_called,
             }
 
         except Exception as e:
+            reraise_if_hitl_pause(e)
             logger.error(f"Error in claims agent: {e}", exc_info=True)
             return {
                 "content": "I apologize, but I encountered an error. Please try again or contact support.",
