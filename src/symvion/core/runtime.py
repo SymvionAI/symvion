@@ -469,6 +469,8 @@ class Symvion:
             logger.info(
                 "STREAM_USAGE_METRICS_UPDATED",
                 ctx,
+                input_tokens=int(total_usage.get("input_tokens") or 0),
+                output_tokens=int(total_usage.get("output_tokens") or 0),
                 tokens_used=tokens_used,
                 total_usage=self.config.current_usage,
             )
